@@ -1,0 +1,3 @@
+[submodule "browsertest/perfetto"]
+	path = browsertest/perfetto
+	url = https://github.com/google/perfetto.git
