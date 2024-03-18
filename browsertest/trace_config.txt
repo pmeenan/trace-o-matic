@@ -1,0 +1,49 @@
+buffers: {
+    size_kb: 522240
+    fill_policy: DISCARD
+}
+buffers: {
+    size_kb: 2048
+    fill_policy: DISCARD
+}
+data_sources: {
+    config {
+        name: "android.packages_list"
+        target_buffer: 1
+    }
+}
+data_sources: {
+    config {
+        name: "org.chromium.trace_event"
+        chrome_config {
+            trace_config: %CONFIG_JSON%
+            privacy_filtering_enabled: false
+            client_priority: USER_INITIATED
+        }
+    }
+}
+data_sources: {
+    config {
+        name: "track_event"
+        chrome_config {
+            trace_config: %CONFIG_JSON%
+            privacy_filtering_enabled: false
+            client_priority: USER_INITIATED
+        }
+        track_event_config {
+            disabled_categories: "*"
+%ENABLED_CATEGORIES%
+        }
+    }
+}
+data_sources: {
+    config {
+        name: "org.chromium.trace_metadata"
+        chrome_config {
+            trace_config: %CONFIG_JSON%
+            privacy_filtering_enabled: false
+            client_priority: USER_INITIATED
+        }
+    }
+}
+duration_ms: 240000

@@ -1,3 +1,6 @@
 /settings.json
 /status.json
 __pycache__
+/browsertest/tmp*
+/browsertest/results
+/www/results

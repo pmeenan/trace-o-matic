@@ -2,14 +2,76 @@
 # Copyright 2024 Google Inc.
 """Trace-O-Matic Browser Test agent"""
 import adb
+import gzip
 import hashlib
 import logging
 import os
+import re
+import shutil
+import subprocess
 import time
+from time import monotonic
 try:
     import ujson as json
 except BaseException:
     import json
+
+CHROME_COMMAND_LINE_OPTIONS = [
+    '--no-default-browser-check',
+    '--no-first-run',
+    '--disable-background-downloads',
+    '--disable-external-intent-requests',
+    '--disable-fre',
+]
+
+DISABLE_CHROME_FEATURES = [
+    'AutofillServerCommunication',
+    'CalculateNativeWinOcclusion',
+    'HeavyAdPrivacyMitigations',
+    'InterestFeedContentSuggestions',
+    'MediaRouter',
+    'OfflinePagesPrefetching',
+    'OptimizationHints',
+    'Translate',
+]
+
+ENABLE_CHROME_FEATURES = [
+    "EnablePerfettoSystemTracing",
+]
+
+ENABLE_BLINK_FEATURES = [
+]
+
+COMMAND_LINE_PATH = '/data/local/tmp/chrome-command-line'
+POLICY_PATH = "/data/local/tmp/policies/recommended/policies.json"
+
+TRACE_CATEGORIES = [
+    "net",
+    "netlog",
+    "blink",
+    "blink.net",
+    "rail",
+    "loading",
+    "v8",
+    "toplevel",
+    "disabled-by-default-net",
+    "disabled-by-default-network",
+    "blink.resource",
+    "blink.user_timing",
+    "blink.console",
+    "devtools",
+    "ipc",
+    "navigation",
+    "scheduler",
+    "resources",
+    "toplevel.flow",
+    "sequence_manager",
+    "disabled-by-default-toplevel.flow",
+    "disabled-by-default-ipc.flow",
+    "mojom",
+    "browser",
+    "__metadata",
+]
 
 class BrowserTest(object):
     """Main agent workflow"""
@@ -17,13 +79,17 @@ class BrowserTest(object):
         self.options = options
         self.PACKAGE = "org.chromium.chrome"
         self.ACTIVITY = "com.google.android.apps.chrome.Main"
+        self.TIME_LIMIT = 120
         self.adb = adb.Adb(options)
         self.path = os.path.abspath(os.path.dirname(__file__))
         self.root_path = os.path.abspath(os.path.join(self.path, os.pardir))
-        self.apk = None
-        self.url = None
-        self.runs = 0
+        self.tmp = os.path.join(self.path, "tmp")
+        if self.options.device is not None:
+            self.tmp += self.options.device
+        self.test = None
         self.current_run = 0
+        self.log_formatter = logging.Formatter(fmt="%(asctime)s.%(msecs)03d - %(message)s",
+                                               datefmt="%H:%M:%S")
         # Load the status from the last run
         self.status = {}
         self.status_file = os.path.join(self.root_path, 'status')
@@ -48,11 +114,28 @@ class BrowserTest(object):
             time.sleep(1)
     
     def get_work(self):
-        self.apk = os.path.join(self.settings["apk_dir"], "latest.apk")
-        self.runs = 1
-        self.current_run = 0
-        self.url = "https://www.google.com/search?q=flowers"
-        return True
+        result = False
+        test_id = "20230318_12345"
+        error = None
+        try:
+            if re.fullmatch(r"[\w]+", test_id):
+                test_path = os.path.join(self.settings['results_dir'], test_id.replace('_', '/'))
+                with open(os.path.join(test_path, 'testinfo.json'), "rt", encoding="utf-8") as f:
+                    self.test = json.load(f)
+                self.test['id'] = test_id
+                self.test['path'] = test_path
+                cl = self.test['cl'] if 'cl' in self.test else 'latest'
+                self.test['apk'] = os.path.join(self.settings["apk_dir"], cl + ".apk")
+                if not os.path.exists(self.test['apk']):
+                    error = "Browser apk not available"
+                self.current_run = 0
+                if 'clear' not in self.test:
+                    self.test['clear'] = False
+                if 'url' in self.test and 'runs' in self.test and error is None:
+                    result = True
+        except Exception:
+            logging.exception("Error loading test")
+        return result
     
     def hash_file(self, file_path):
         out = None
@@ -71,30 +154,162 @@ class BrowserTest(object):
         # Navigate the Chromium browser to the provided URL
         activity = '{0}/{1}'.format(self.PACKAGE, self.ACTIVITY)
         return self.adb.shell(['am', 'start', '-n', activity, '-a', 'android.intent.action.VIEW', '-d', url])
+    
+    def wait_for_network_idle(self, timeout=60, threshold=10000):
+        """Wait for 5 one-second intervals that receive less than 10KB/sec"""
+        logging.debug('Waiting for network idle')
+        end_time = monotonic() + timeout
+        self.adb.get_bytes_rx()
+        idle_count = 0
+        while idle_count < 5 and monotonic() < end_time:
+            time.sleep(1)
+            bytes_rx = self.adb.get_bytes_rx()
+            logging.debug("Bytes received: %d", bytes_rx)
+            if bytes_rx > threshold:
+                idle_count = 0
+            else:
+                idle_count += 1
 
-    def run_test(self):
-        logging.debug("Running test run # %d", self.current_run)
-        # clear browser profile/cache
-        self.adb.shell(['am', 'force-stop', self.PACKAGE])
+    def wait_for_page_load(self):
+        """Once the video starts growing, wait for it to stop"""
+        logging.debug('Waiting for the page to load')
+        # Wait for the video to start (up to 30 seconds)
+        end_startup = monotonic() + 30
+        end_time = monotonic() + self.TIME_LIMIT
+        last_size = self.adb.get_video_size()
+        video_started = False
+        bytes_rx = self.adb.get_bytes_rx()
+        while not video_started and monotonic() < end_startup:
+            time.sleep(5)
+            video_size = self.adb.get_video_size()
+            bytes_rx = self.adb.get_bytes_rx()
+            delta = video_size - last_size
+            logging.debug('Video Size: %d bytes (+ %d)', video_size, delta)
+            last_size = video_size
+            if delta > 50000:
+                video_started = True
+        logging.debug('Page started loading')
+        # Wait for the activity to stop
+        video_idle_count = 0
+        while video_idle_count <= 3 and monotonic() < end_time:
+            time.sleep(5)
+            video_size = self.adb.get_video_size()
+            bytes_rx = self.adb.get_bytes_rx()
+            delta = video_size - last_size
+            logging.debug('Video Size: %d bytes (+ %d) - %d bytes received',
+                          video_size, delta, bytes_rx)
+            last_size = video_size
+            #if delta > 10000 or bytes_rx > 5000:
+            if delta > 10000:
+                video_idle_count = 0
+            else:
+                video_idle_count += 1
+
+    def launch_browser(self):
+        """ Prepare and launch the browser """
+        # Copy the policies over
+        self.adb.shell(['rm', POLICY_PATH])
+        self.adb.adb(['push', os.path.join(self.path, "chrome_policy.json"), COMMAND_LINE_PATH])
+
+        # set up the Chromium command-line
+        self.adb.shell(['rm', COMMAND_LINE_PATH])
+        args = list(CHROME_COMMAND_LINE_OPTIONS)
+        features = list(ENABLE_CHROME_FEATURES)
+        disable_features = list(DISABLE_CHROME_FEATURES)
+        blink_features = list(ENABLE_BLINK_FEATURES)
+        if len(features):
+            args.append('--enable-features=' + ','.join(features))
+        if len(disable_features):
+            args.append('--disable-features=' + ','.join(disable_features))
+        if len(blink_features):
+            args.append('--enable-blink-features=' + ','.join(blink_features))
+        command_line = '_ ' + ' '.join(args)
+        local_command_line = os.path.join(self.path, 'chrome-command-line')
+        logging.debug(command_line)
+        with open(local_command_line, 'wt', encoding="utf-8") as f_out:
+            f_out.write(command_line)
+        self.adb.adb(['push', local_command_line, COMMAND_LINE_PATH])
+        os.remove(local_command_line)
 
         # Launch browser to https://trace-o-matic.com/blank.html
         self.navigate("https://trace-o-matic.com/blank.html")
         time.sleep(10)
+        self.wait_for_network_idle()
 
-        # Wait for network idle(ish)
+    def build_perfetto_config(self, dest):
+        """ Build the perfetto trace config file for the given Chrome categories """
+        with open(os.path.join(self.path, "trace_config.txt"), "rt", encoding="utf-8") as f:
+            config_txt = f.read()
+        config = {
+            "record_mode": "record-until-full",
+            "included_categories":TRACE_CATEGORIES,
+            "excluded_categories":["*"],
+            "memory_dump_config":{}
+            }
+        config_json = json.dumps(json.dumps(config, separators=(',', ':')))
+        categories_txt = ""
+        for category in TRACE_CATEGORIES:
+            categories_txt += "            enabled_categories: \"{}\"\n".format(category)
+        config_txt = config_txt.replace("%CONFIG_JSON%", config_json)
+        config_txt = config_txt.replace("%ENABLED_CATEGORIES%", categories_txt)
+        config_file = os.path.join(self.tmp, "perfetto.pbtx")
+        with open(config_file, "wt", encoding="utf-8") as f:
+            f.write(config_txt)
+        ret = self.adb.adb(["push", config_file, dest])
+        os.remove(config_file)
+        return ret
+
+    def run_test(self):
+        logging.debug("Running test run # %d", self.current_run)
+        video_file = os.path.join(self.tmp, "{:03d}-video.mp4".format(self.current_run))
+        trace_file = os.path.join(self.tmp, "{:03d}-trace.perfetto".format(self.current_run))
+        screenshot_file = os.path.join(self.tmp, "{:03d}-screenshot.png".format(self.current_run))
+
+        # Clear browser profile/cache
+        self.adb.shell(['am', 'force-stop', self.PACKAGE])
+        if self.current_run == 1 or self.test['clear']:
+            self.adb.shell(['pm', 'clear', self.PACKAGE])
+
+        # Start the browser
+        self.launch_browser()
+
         # Start video capture (and wait)
+        self.adb.start_screenrecord()
         # start perfetto capture
+        remote_trace_config = "/data/misc/perfetto-configs/tom.pbtx"
+        remote_trace_file = "/data/misc/perfetto-traces/trace"
+        self.adb.shell(['rm', remote_trace_file])
+        self.build_perfetto_config(remote_trace_config)
+        cmd = self.adb.build_adb_command(['shell', 'perfetto', '-c', remote_trace_config, '--txt', '-o', remote_trace_file])
+        perfetto = subprocess.Popen(cmd)
 
         # Navigate to test page
-        self.navigate(self.url)
-        time.sleep(10)
-        # Wait for video-based completion
+        time.sleep(2)
+        self.navigate(self.test['url'])
+        self.wait_for_page_load()
+
         # stop perfetto capture
+        self.adb.shell(['killall', 'perfetto'])
+
         # stop video capture
+        self.adb.stop_screenrecord(video_file)
+
+        # Grab a screenshot
+        self.adb.screenshot(screenshot_file)
+
+        # Pull perfetto file
+        self.adb.wait_for_process(perfetto)
+        self.adb.adb(['pull', remote_trace_file, trace_file])
+
         # close the browser
         self.adb.shell(['am', 'force-stop', self.PACKAGE])
-        # Pull perfetto file
-        # Pull video file
+
+        # compress the trace
+        logging.debug("Compressing the trace file")
+        with open(trace_file, 'rb') as f_in:
+            with gzip.open(trace_file + '.gz', 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        os.remove(trace_file)
 
     def run(self):
         try:
@@ -102,19 +317,48 @@ class BrowserTest(object):
             self.wait_for_device_ready()
             # Install browser
             if self.get_work():
+                shutil.rmtree(self.tmp, ignore_errors=True)
+                os.mkdir(self.tmp)
+
+                # Capture a debug log along with the test
+                log_file = os.path.join(self.tmp, 'test.log')
+                log_handler = logging.FileHandler(log_file)
+                log_handler.setFormatter(self.log_formatter)
+                logging.getLogger().addHandler(log_handler)
+
+                logging.debug("Running test %s", self.test['id'])
                 self.adb.cleanup_device()
-                apk_hash = self.hash_file(self.apk)
+                apk_hash = self.hash_file(self.test['apk'])
                 if apk_hash is not None:
                     if 'last_apk' not in self.status or self.status['last_apk'] != apk_hash:
-                        logging.info("Installing browser apk %s (hash %s)...", self.apk, apk_hash)
-                        if self.adb.adb(["install", self.apk]):
+                        logging.info("Installing browser apk %s (hash %s)...", self.test['apk'], apk_hash)
+                        if self.adb.adb(["install", self.test['apk']]):
                             self.status['last_apk'] = apk_hash
                     else:
                         logging.debug("Browser APK unchanged")
 
                 # run the tests
-                for self.current_run in range(1, self.runs + 1):
+                for self.current_run in range(1, self.test['runs'] + 1):
                     self.run_test()
+
+                # Turn off the logging
+                try:
+                    log_handler.close()
+                    logging.getLogger().removeHandler(log_handler)
+                    with open(log_file, 'rb') as f_in:
+                        with gzip.open(log_file + '.gz', 'wb') as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                    os.remove(log_file)
+                except Exception:
+                    pass
+
+                # Move the test results to the results directory
+                logging.debug("Uploading test results")
+                files = os.listdir(self.tmp)
+                for file in files:
+                    logging.debug("Uploading %s...", file)
+                    shutil.move(os.path.join(self.tmp, file), self.test['path'])
+                logging.debug("Test complete")
         except Exception:
             logging.exception("Unhandled exception")
         self.cleanup()
