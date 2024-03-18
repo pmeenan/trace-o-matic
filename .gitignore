@@ -4,3 +4,4 @@ __pycache__
 /browsertest/tmp*
 /browsertest/results
 /www/results
+.vscode
