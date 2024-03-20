@@ -153,7 +153,10 @@ class BrowserTest(object):
     def navigate(self, url):
         # Navigate the Chromium browser to the provided URL
         activity = '{0}/{1}'.format(self.PACKAGE, self.ACTIVITY)
-        return self.adb.shell(['am', 'start', '-n', activity, '-a', 'android.intent.action.VIEW', '-d', url])
+        return self.adb.shell(['am', 'start', '-n', activity,
+                               '-a', 'android.intent.action.VIEW',
+                               '-d', url,
+                               '--es', 'com.android.browser.application_id', 'com.android.browser'])
     
     def wait_for_network_idle(self, timeout=60, threshold=10000):
         """Wait for 5 one-second intervals that receive less than 10KB/sec"""
@@ -263,6 +266,7 @@ class BrowserTest(object):
         logging.debug("Running test run # %d", self.current_run)
         video_file = os.path.join(self.tmp, "{:03d}-video.mp4".format(self.current_run))
         trace_file = os.path.join(self.tmp, "{:03d}-trace.perfetto".format(self.current_run))
+        trace_file_json = os.path.join(self.tmp, "{:03d}-trace.json".format(self.current_run))
         screenshot_file = os.path.join(self.tmp, "{:03d}-screenshot.png".format(self.current_run))
 
         # Clear browser profile/cache
@@ -306,10 +310,19 @@ class BrowserTest(object):
 
         # compress the trace
         logging.debug("Compressing the trace file")
-        with open(trace_file, 'rb') as f_in:
-            with gzip.open(trace_file + '.gz', 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-        os.remove(trace_file)
+        if os.path.exists(trace_file):
+            with open(trace_file, 'rb') as f_in:
+                with gzip.open(trace_file + '.gz', 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            # create a json version of the trace
+            logging.debug("Converting trace to json")
+            subprocess.call(['python3', os.path.join(self.path, "tools", "traceconv"), "json", trace_file, trace_file_json])
+            if os.path.exists(trace_file_json):
+                with open(trace_file_json, 'rb') as f_in:
+                    with gzip.open(trace_file_json + '.gz', 'wb') as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                os.remove(trace_file_json)
+            os.remove(trace_file)
 
     def run(self):
         try:
@@ -358,6 +371,10 @@ class BrowserTest(object):
                 for file in files:
                     logging.debug("Uploading %s...", file)
                     shutil.move(os.path.join(self.tmp, file), self.test['path'])
+
+                # Mark the test as done
+                with open(os.path.join(self.test['path'], '.done'), 'wt'):
+                    pass
                 logging.debug("Test complete")
         except Exception:
             logging.exception("Unhandled exception")

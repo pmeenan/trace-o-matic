@@ -9,7 +9,7 @@ if (isset($ID) && isset($RUN)) {
 } else {
   $ERROR = "Invalid trace";
 }
-$CSS = "body {margin:0px;padding:0px;overflow:hidden};";
+$CSS = "body {margin:0px;padding:0px;overflow:hidden}\n";
 include(__DIR__ . "/include/header.php");
 ?>
   <script>
@@ -24,7 +24,7 @@ include(__DIR__ . "/include/header.php");
       document.getElementById('perfetto').contentWindow.postMessage({
             perfetto: {
                 buffer: arrayBuffer,
-                title: 'WebPageTest Trace',
+                title: 'Trace-O-Matic Trace',
                 url: window.location.toString(),
             }}, ORIGIN);
     }
