@@ -20,6 +20,7 @@ function get_test_status() {
     $status['heading'] = "Test is pending";
     $status['status'] = file_get_contents("$TEST_DIR/.status");
   } else {
+    $status['heading'] = "Test is pending";
     if ($info['needs_build']) {
       $status['status'] = "Waiting for build bot";
     } else {

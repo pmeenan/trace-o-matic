@@ -9,6 +9,9 @@ if (isset($ERROR)) {
   <head>
     <title><?php echo(htmlspecialchars($TITLE)); ?></title>
     <style>
+      body {
+        font-family: Arial, sans-serif;
+      }
       .thumbnail {
         float: left;
         height: 200px;
@@ -31,6 +34,29 @@ if (isset($ERROR)) {
       .links ul {
         list-style-position: inside;
         padding-left: 1em;
+      }
+      #test_form {
+        margin: auto;
+        max-width: 1000px;
+      }
+      #test_form form {
+        padding-left: 40px;
+      }
+      #categories {
+        text-align: left;
+        border-collapse: collapse;
+        margin: 1em;
+        border-style: solid;
+      }
+      #categories tr {
+        border-style: solid;
+      }
+      #categories th {
+        border-style: solid;
+      }
+      #categories td {
+        border-style: solid;
+        vertical-align: top;
       }
     </style>
     <?php

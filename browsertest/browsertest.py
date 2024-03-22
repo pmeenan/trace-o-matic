@@ -46,31 +46,33 @@ COMMAND_LINE_PATH = '/data/local/tmp/chrome-command-line'
 POLICY_PATH = "/data/local/tmp/policies/recommended/policies.json"
 
 TRACE_CATEGORIES = [
-    "net",
-    "netlog",
     "blink",
+    "blink.console",
     "blink.net",
-    "rail",
-    "loading",
-    "v8",
-    "toplevel",
-    "disabled-by-default-net",
-    "disabled-by-default-network",
     "blink.resource",
     "blink.user_timing",
-    "blink.console",
-    "devtools",
-    "ipc",
-    "navigation",
-    "scheduler",
-    "resources",
-    "toplevel.flow",
-    "sequence_manager",
-    "disabled-by-default-toplevel.flow",
-    "disabled-by-default-ipc.flow",
-    "mojom",
     "browser",
-    "__metadata",
+    "devtools",
+    "devtools.timeline",
+    "ipc",
+    "loading",
+    "mojom",
+    "navigation",
+    "net",
+    "netlog",
+    "rail",
+    "resources",
+    "scheduler",
+    "sequence_manager",
+    "toplevel",
+    "toplevel.flow",
+    "v8",
+    "v8.execute",
+    "disabled-by-default-devtools.screenshot",
+    "disabled-by-default-ipc.flow",
+    "disabled-by-default-net",
+    "disabled-by-default-network",
+    "disabled-by-default-toplevel.flow",
 ]
 
 class BrowserTest(object):
@@ -115,7 +117,7 @@ class BrowserTest(object):
     
     def get_work(self):
         result = False
-        test_id = "20230318_12345"
+        test_id = "20240322_192b608ce6ee32cfa707"
         error = None
         try:
             if re.fullmatch(r"[\w]+", test_id):
@@ -128,9 +130,14 @@ class BrowserTest(object):
                 self.test['apk'] = os.path.join(self.settings["apk_dir"], cl + ".apk")
                 if not os.path.exists(self.test['apk']):
                     error = "Browser apk not available"
+                    self.set_status(error)
                 self.current_run = 0
-                if 'clear' not in self.test:
-                    self.test['clear'] = False
+                self.test['clear'] = bool('clear' in self.test and self.test['clear'])
+                self.test['video'] = bool('video' in self.test and self.test['video'])
+                self.test['cpu'] = bool('cpu' in self.test and self.test['cpu'])
+                if 'categories' not in self.test:
+                    self.test['categories'] = TRACE_CATEGORIES
+                self.test['categories'].append("__metadata")
                 if 'url' in self.test and 'runs' in self.test and error is None:
                     result = True
         except Exception:
@@ -241,17 +248,18 @@ class BrowserTest(object):
 
     def build_perfetto_config(self, dest):
         """ Build the perfetto trace config file for the given Chrome categories """
-        with open(os.path.join(self.path, "trace_config.txt"), "rt", encoding="utf-8") as f:
+        config_file = "trace_config_cpu.txt" if self.test['cpu'] else "trace_config.txt"
+        with open(os.path.join(self.path, config_file), "rt", encoding="utf-8") as f:
             config_txt = f.read()
         config = {
             "record_mode": "record-until-full",
-            "included_categories":TRACE_CATEGORIES,
+            "included_categories":self.test['categories'],
             "excluded_categories":["*"],
             "memory_dump_config":{}
             }
         config_json = json.dumps(json.dumps(config, separators=(',', ':')))
         categories_txt = ""
-        for category in TRACE_CATEGORIES:
+        for category in self.test['categories']:
             categories_txt += "            enabled_categories: \"{}\"\n".format(category)
         config_txt = config_txt.replace("%CONFIG_JSON%", config_json)
         config_txt = config_txt.replace("%ENABLED_CATEGORIES%", categories_txt)
@@ -264,18 +272,20 @@ class BrowserTest(object):
 
     def run_test(self):
         logging.debug("Running test run # %d", self.current_run)
-        video_file = os.path.join(self.tmp, "{:03d}-video.mp4".format(self.current_run))
+        if self.test['video']:
+            video_file = os.path.join(self.tmp, "{:03d}-video.mp4".format(self.current_run))
+        else:
+            video_file = None
         trace_file = os.path.join(self.tmp, "{:03d}-trace.perfetto".format(self.current_run))
         trace_file_json = os.path.join(self.tmp, "{:03d}-trace.json".format(self.current_run))
         screenshot_file = os.path.join(self.tmp, "{:03d}-screenshot.png".format(self.current_run))
 
-        # Clear browser profile/cache
-        self.adb.shell(['am', 'force-stop', self.PACKAGE])
+        # Clear browser profile/cache and launch the browser
+        self.set_status('Preparing browser')
         if self.current_run == 1 or self.test['clear']:
+            self.adb.shell(['am', 'force-stop', self.PACKAGE])
             self.adb.shell(['pm', 'clear', self.PACKAGE])
-
-        # Start the browser
-        self.launch_browser()
+            self.launch_browser()
 
         # Start video capture (and wait)
         self.adb.start_screenrecord()
@@ -288,9 +298,11 @@ class BrowserTest(object):
         perfetto = subprocess.Popen(cmd)
 
         # Navigate to test page
+        self.set_status('Waiting for page to finish loading')
         time.sleep(2)
         self.navigate(self.test['url'])
         self.wait_for_page_load()
+        self.set_status('Collecting trace data')
 
         # stop perfetto capture
         self.adb.shell(['killall', 'perfetto'])
@@ -305,8 +317,8 @@ class BrowserTest(object):
         self.adb.wait_for_process(perfetto)
         self.adb.adb(['pull', remote_trace_file, trace_file])
 
-        # close the browser
-        self.adb.shell(['am', 'force-stop', self.PACKAGE])
+        # Go back to the blank page
+        self.navigate("https://trace-o-matic.com/blank.html")
 
         # compress the trace
         logging.debug("Compressing the trace file")
@@ -324,12 +336,29 @@ class BrowserTest(object):
                 os.remove(trace_file_json)
             os.remove(trace_file)
 
+    def set_status(self, status):
+        """ Update the .running file with the test status"""
+        if self.test is not None and 'path' in self.test:
+            status_txt = ''
+            if self.current_run > 0 and 'runs' in self.test and self.test['runs'] > 1:
+                status_txt = 'Run {} of {} - '.format(self.current_run, self.test['runs'])
+            status_txt += status
+            logging.debug(status_txt)
+            with open(os.path.join(self.test['path'], '.running'), 'wt') as f:
+                f.write(status_txt)
+
     def run(self):
         try:
             # Prepare device
             self.wait_for_device_ready()
             # Install browser
             if self.get_work():
+                self.current_run = 0
+                self.set_status("Test started")
+                building_file = os.path.join(self.test['path'], '.building')
+                if os.path.exists(building_file):
+                    os.remove(building_file)
+
                 shutil.rmtree(self.tmp, ignore_errors=True)
                 os.mkdir(self.tmp)
 
@@ -341,18 +370,26 @@ class BrowserTest(object):
 
                 logging.debug("Running test %s", self.test['id'])
                 self.adb.cleanup_device()
+                self.adb.shell(['am', 'force-stop', self.PACKAGE])
                 apk_hash = self.hash_file(self.test['apk'])
                 if apk_hash is not None:
                     if 'last_apk' not in self.status or self.status['last_apk'] != apk_hash:
-                        logging.info("Installing browser apk %s (hash %s)...", self.test['apk'], apk_hash)
+                        self.set_status("Installing browser apk {} (hash {})...".format(self.test['apk'], apk_hash))
                         if self.adb.adb(["install", self.test['apk']]):
                             self.status['last_apk'] = apk_hash
                     else:
                         logging.debug("Browser APK unchanged")
 
+                # Clear browser profile/cache
+                self.adb.shell(['pm', 'clear', self.PACKAGE])
+
                 # run the tests
                 for self.current_run in range(1, self.test['runs'] + 1):
                     self.run_test()
+
+                # Reset the browser state
+                self.adb.shell(['am', 'force-stop', self.PACKAGE])
+                self.adb.shell(['pm', 'clear', self.PACKAGE])
 
                 # Turn off the logging
                 try:
@@ -373,8 +410,11 @@ class BrowserTest(object):
                     shutil.move(os.path.join(self.tmp, file), self.test['path'])
 
                 # Mark the test as done
-                with open(os.path.join(self.test['path'], '.done'), 'wt'):
+                with open(os.path.join(self.test['path'], '.done'), 'wt') as f:
                     pass
+                running_file = os.path.join(self.test['path'], '.running')
+                if os.path.exists(running_file):
+                    os.remove(running_file)
                 logging.debug("Test complete")
         except Exception:
             logging.exception("Unhandled exception")

@@ -116,7 +116,8 @@ class Adb(object):
             self.kill_proc('screenrecord')
             self.wait_for_process(self.screenrecord)
             self.screenrecord = None
-            self.adb(['pull', '/data/local/tmp/tom_video.mp4', local_file])
+            if local_file is not None:
+                self.adb(['pull', '/data/local/tmp/tom_video.mp4', local_file])
             self.shell(['rm', '/data/local/tmp/tom_video.mp4'])
 
     def get_battery_stats(self):
