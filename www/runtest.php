@@ -1,5 +1,8 @@
 <?php
 include(__DIR__ . "/include/common.php");
+require(__DIR__ . '/../vendor/autoload.php');
+use Pheanstalk\Pheanstalk;
+use Pheanstalk\Values\TubeName;
 
 function generate_test_id() {
   global $SETTINGS;
@@ -21,6 +24,8 @@ function get_test_settings() {
     $test['runs'] = intval($_REQUEST['runs']);
   if (isset($_REQUEST['cl']) && filter_var($_REQUEST['cl'], FILTER_VALIDATE_INT))
     $test['cl'] = intval($_REQUEST['cl']);
+  if (isset($_REQUEST['latency']) && filter_var($_REQUEST['latency'], FILTER_VALIDATE_INT))
+    $test['latency'] = intval($_REQUEST['latency']);
   $test['rebuild'] = isset($_REQUEST['rebuild']) && $_REQUEST['rebuild'];
   $test['clear'] = isset($_REQUEST['clear']) && $_REQUEST['clear'];
   $test['video'] = isset($_REQUEST['video']) && $_REQUEST['video'];
@@ -51,12 +56,23 @@ if (isset($test)) {
   mkdir($dir, 0777, true);
   file_put_contents("$dir/testinfo.json", json_encode($test));
 
-  // TODO submit the test the appropriate beanstalk queue (build or test)
+  try {
+    $pheanstalk = Pheanstalk::create('127.0.0.1');
+    if (isset($test['cl'])) {
+      $tube = new TubeName('build');
+    } else {
+      $tube = new TubeName('test');
+    }
+    $pheanstalk->useTube($tube);
+    $pheanstalk->put($test['id']);
 
-  header("Location: {$SETTINGS['root_url']}view.php?test={$test['id']}");
-  exit(0);
+    header("Location: {$SETTINGS['root_url']}view.php?test={$test['id']}");
+    exit(0);
+  } catch(\Exception $e) {
+    $ERROR = "Error submitting test to queue";
+    include(__DIR__ . "/error.php");
+  }
 } else {
   $ERROR = "Error with test request";
   include(__DIR__ . "/error.php");
-  exit(0);
 }

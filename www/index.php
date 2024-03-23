@@ -23,6 +23,10 @@ include(__DIR__ . "/include/header.php");
   <input type="submit" value="Start Test">
   <h3>Advanced Settings:</h3>
   <p>
+  <label for="latency">Additional connection latency (ms):</label>
+  <input type="number" id="latency" name="latency" value="0" min="0" max="1000" step="1">
+  </p>
+  <p>
   <label for="cl">Patch build with Chromium <a href="https://chromium-review.googlesource.com/">CL</a> (numeric, optional):</label>
   <input type="number" id="cl" name="cl" value="" min="5000000" max="500000000" step="1">
   </p>

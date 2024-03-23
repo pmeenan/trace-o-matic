@@ -2,12 +2,14 @@
 # Copyright 2024 Google Inc.
 """Trace-O-Matic Browser Test agent"""
 import adb
+import greenstalk
 import gzip
 import hashlib
 import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from time import monotonic
@@ -89,9 +91,17 @@ class BrowserTest(object):
         if self.options.device is not None:
             self.tmp += self.options.device
         self.test = None
+        self.job = None
         self.current_run = 0
         self.log_formatter = logging.Formatter(fmt="%(asctime)s.%(msecs)03d - %(message)s",
                                                datefmt="%H:%M:%S")
+        self.must_exit = False
+        """
+        signal.signal(signal.SIGTERM, self.signal_handler)
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGHUP, self.signal_handler)
+        """
+
         # Load the status from the last run
         self.status = {}
         self.status_file = os.path.join(self.root_path, 'status')
@@ -107,6 +117,21 @@ class BrowserTest(object):
         with open(os.path.join(self.root_path, 'settings.json'), "rt", encoding="utf-8") as f_settings:
             self.settings = json.load(f_settings)
 
+        # Connect to beanstalk
+        self.queue = greenstalk.Client(('127.0.0.1', 11300))
+        self.queue.watch('test')
+
+    def signal_handler(self, signum, frame):
+        """Ctrl+C handler"""
+        try:
+            if not self.must_exit:
+                logging.info("Exiting...")
+                self.must_exit = True
+            else:
+                logging.info("Waiting for graceful exit...")
+        except Exception as e:
+            logging.exception("Error in signal handler")
+
     def cleanup(self):
         with open(self.status_file, "wt", encoding="utf-8") as f_status:
             json.dump(self.status, f_status)
@@ -114,32 +139,47 @@ class BrowserTest(object):
     def wait_for_device_ready(self):
         while not self.adb.is_device_ready():
             time.sleep(1)
+
+    def reset_shaper(self):
+        """ Remove any tc config on a remote traffic-shaping bridge """
+        if ('shaper' in self.settings):
+            cmd = ['ssh', self.settings['shaper'], 'sudo tc qdisc del dev wlan0 root']
+            logging.debug('%s', ' '.join(cmd))
+            subprocess.call(cmd)
+
+    def configure_shaper(self):
+        if ('shaper' in self.settings and 'latency' in self.test and self.test['latency'] > 0):
+            cmd = ['ssh', self.settings['shaper'], 'sudo tc qdisc add dev wlan0 root netem delay {}ms'.format(self.test['latency'])]
+            logging.debug('%s', ' '.join(cmd))
+            subprocess.call(cmd)
     
     def get_work(self):
         result = False
-        test_id = "20240322_192b608ce6ee32cfa707"
         error = None
         try:
-            if re.fullmatch(r"[\w]+", test_id):
-                test_path = os.path.join(self.settings['results_dir'], test_id.replace('_', '/'))
-                with open(os.path.join(test_path, 'testinfo.json'), "rt", encoding="utf-8") as f:
-                    self.test = json.load(f)
-                self.test['id'] = test_id
-                self.test['path'] = test_path
-                cl = self.test['cl'] if 'cl' in self.test else 'latest'
-                self.test['apk'] = os.path.join(self.settings["apk_dir"], cl + ".apk")
-                if not os.path.exists(self.test['apk']):
-                    error = "Browser apk not available"
-                    self.set_status(error)
-                self.current_run = 0
-                self.test['clear'] = bool('clear' in self.test and self.test['clear'])
-                self.test['video'] = bool('video' in self.test and self.test['video'])
-                self.test['cpu'] = bool('cpu' in self.test and self.test['cpu'])
-                if 'categories' not in self.test:
-                    self.test['categories'] = TRACE_CATEGORIES
-                self.test['categories'].append("__metadata")
-                if 'url' in self.test and 'runs' in self.test and error is None:
-                    result = True
+            self.job = self.queue.reserve()
+            if self.job:
+                test_id = self.job.body
+                if re.fullmatch(r"[\w]+", test_id):
+                    test_path = os.path.join(self.settings['results_dir'], test_id.replace('_', '/'))
+                    with open(os.path.join(test_path, 'testinfo.json'), "rt", encoding="utf-8") as f:
+                        self.test = json.load(f)
+                    self.test['id'] = test_id
+                    self.test['path'] = test_path
+                    cl = self.test['cl'] if 'cl' in self.test else 'latest'
+                    self.test['apk'] = os.path.join(self.settings["apk_dir"], cl + ".apk")
+                    if not os.path.exists(self.test['apk']):
+                        error = "Browser apk not available"
+                        self.set_status(error)
+                    self.current_run = 0
+                    self.test['clear'] = bool('clear' in self.test and self.test['clear'])
+                    self.test['video'] = bool('video' in self.test and self.test['video'])
+                    self.test['cpu'] = bool('cpu' in self.test and self.test['cpu'])
+                    if 'categories' not in self.test:
+                        self.test['categories'] = TRACE_CATEGORIES
+                    self.test['categories'].append("__metadata")
+                    if 'url' in self.test and 'runs' in self.test and error is None:
+                        result = True
         except Exception:
             logging.exception("Error loading test")
         return result
@@ -346,76 +386,85 @@ class BrowserTest(object):
             logging.debug(status_txt)
             with open(os.path.join(self.test['path'], '.running'), 'wt') as f:
                 f.write(status_txt)
+            if (self.job is not None):
+                self.queue.touch(self.job)
 
     def run(self):
         try:
             # Prepare device
             self.wait_for_device_ready()
-            # Install browser
-            if self.get_work():
-                self.current_run = 0
-                self.set_status("Test started")
-                building_file = os.path.join(self.test['path'], '.building')
-                if os.path.exists(building_file):
-                    os.remove(building_file)
+            self.reset_shaper()
+            while(not self.must_exit):
+                if self.get_work():
+                    try:
+                        self.current_run = 0
+                        self.set_status("Test started")
+                        building_file = os.path.join(self.test['path'], '.building')
+                        if os.path.exists(building_file):
+                            os.remove(building_file)
 
-                shutil.rmtree(self.tmp, ignore_errors=True)
-                os.mkdir(self.tmp)
+                        shutil.rmtree(self.tmp, ignore_errors=True)
+                        os.mkdir(self.tmp)
 
-                # Capture a debug log along with the test
-                log_file = os.path.join(self.tmp, 'test.log')
-                log_handler = logging.FileHandler(log_file)
-                log_handler.setFormatter(self.log_formatter)
-                logging.getLogger().addHandler(log_handler)
+                        # Capture a debug log along with the test
+                        log_file = os.path.join(self.tmp, 'test.log')
+                        log_handler = logging.FileHandler(log_file)
+                        log_handler.setFormatter(self.log_formatter)
+                        logging.getLogger().addHandler(log_handler)
 
-                logging.debug("Running test %s", self.test['id'])
-                self.adb.cleanup_device()
-                self.adb.shell(['am', 'force-stop', self.PACKAGE])
-                apk_hash = self.hash_file(self.test['apk'])
-                if apk_hash is not None:
-                    if 'last_apk' not in self.status or self.status['last_apk'] != apk_hash:
-                        self.set_status("Installing browser apk {} (hash {})...".format(self.test['apk'], apk_hash))
-                        if self.adb.adb(["install", self.test['apk']]):
-                            self.status['last_apk'] = apk_hash
-                    else:
-                        logging.debug("Browser APK unchanged")
+                        logging.debug("Running test %s", self.test['id'])
+                        self.adb.cleanup_device()
+                        self.adb.shell(['am', 'force-stop', self.PACKAGE])
+                        apk_hash = self.hash_file(self.test['apk'])
+                        if apk_hash is not None:
+                            if 'last_apk' not in self.status or self.status['last_apk'] != apk_hash:
+                                self.set_status("Installing browser apk {} (hash {})...".format(self.test['apk'], apk_hash))
+                                if self.adb.adb(["install", self.test['apk']]):
+                                    self.status['last_apk'] = apk_hash
+                            else:
+                                logging.debug("Browser APK unchanged")
 
-                # Clear browser profile/cache
-                self.adb.shell(['pm', 'clear', self.PACKAGE])
+                        # Clear browser profile/cache
+                        self.adb.shell(['pm', 'clear', self.PACKAGE])
 
-                # run the tests
-                for self.current_run in range(1, self.test['runs'] + 1):
-                    self.run_test()
+                        # run the tests
+                        self.configure_shaper()
+                        for self.current_run in range(1, self.test['runs'] + 1):
+                            self.run_test()
+                        self.reset_shaper()
 
-                # Reset the browser state
-                self.adb.shell(['am', 'force-stop', self.PACKAGE])
-                self.adb.shell(['pm', 'clear', self.PACKAGE])
+                        # Reset the browser state
+                        self.adb.shell(['am', 'force-stop', self.PACKAGE])
+                        self.adb.shell(['pm', 'clear', self.PACKAGE])
 
-                # Turn off the logging
-                try:
-                    log_handler.close()
-                    logging.getLogger().removeHandler(log_handler)
-                    with open(log_file, 'rb') as f_in:
-                        with gzip.open(log_file + '.gz', 'wb') as f_out:
-                            shutil.copyfileobj(f_in, f_out)
-                    os.remove(log_file)
-                except Exception:
-                    pass
+                        # Turn off the logging
+                        try:
+                            log_handler.close()
+                            logging.getLogger().removeHandler(log_handler)
+                            with open(log_file, 'rb') as f_in:
+                                with gzip.open(log_file + '.gz', 'wb') as f_out:
+                                    shutil.copyfileobj(f_in, f_out)
+                            os.remove(log_file)
+                        except Exception:
+                            pass
 
-                # Move the test results to the results directory
-                logging.debug("Uploading test results")
-                files = os.listdir(self.tmp)
-                for file in files:
-                    logging.debug("Uploading %s...", file)
-                    shutil.move(os.path.join(self.tmp, file), self.test['path'])
+                        # Move the test results to the results directory
+                        logging.debug("Uploading test results")
+                        files = os.listdir(self.tmp)
+                        for file in files:
+                            logging.debug("Uploading %s...", file)
+                            shutil.move(os.path.join(self.tmp, file), self.test['path'])
 
-                # Mark the test as done
-                with open(os.path.join(self.test['path'], '.done'), 'wt') as f:
-                    pass
-                running_file = os.path.join(self.test['path'], '.running')
-                if os.path.exists(running_file):
-                    os.remove(running_file)
-                logging.debug("Test complete")
+                        # Mark the test as done
+                        with open(os.path.join(self.test['path'], '.done'), 'wt') as f:
+                            pass
+                        running_file = os.path.join(self.test['path'], '.running')
+                        if os.path.exists(running_file):
+                            os.remove(running_file)
+                        self.queue.delete(self.job)
+                        logging.debug("Test complete")
+                    except Exception:
+                        logging.exception("Unhandled exception running test")
         except Exception:
             logging.exception("Unhandled exception")
         self.cleanup()
