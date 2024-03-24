@@ -61,6 +61,7 @@ data_sources: {
         ftrace_config {
             ftrace_events: "sched/sched_switch"
             ftrace_events: "power/cpu_frequency"
+            ftrace_events: "power/cpu_idle"
             ftrace_events: "power/suspend_resume"
             ftrace_events: "sched/sched_wakeup"
             ftrace_events: "sched/sched_wakeup_new"
