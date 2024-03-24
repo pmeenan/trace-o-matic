@@ -219,6 +219,8 @@ class BrowserTest(object):
                 idle_count = 0
             else:
                 idle_count += 1
+            if (self.job is not None):
+                self.queue.touch(self.job)
 
     def wait_for_page_load(self):
         """Once the video starts growing, wait for it to stop"""
@@ -238,6 +240,8 @@ class BrowserTest(object):
             last_size = video_size
             if delta > 50000:
                 video_started = True
+            if (self.job is not None):
+                self.queue.touch(self.job)
         logging.debug('Page started loading')
         # Wait for the activity to stop
         video_idle_count = 0
@@ -254,6 +258,8 @@ class BrowserTest(object):
                 video_idle_count = 0
             else:
                 video_idle_count += 1
+            if (self.job is not None):
+                self.queue.touch(self.job)
 
     def launch_browser(self):
         """ Prepare and launch the browser """

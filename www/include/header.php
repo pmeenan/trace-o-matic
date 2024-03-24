@@ -58,6 +58,35 @@ if (isset($ERROR)) {
         border-style: solid;
         vertical-align: top;
       }
+      #overlay {
+        z-index:9999999;
+        pointer-events:none;
+        position:fixed;
+        top:0;
+        left:0;
+        width:100vw;
+        height:100vh;
+        background:rgba(0,0,0,0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #overlay_content {
+        position: fixed;
+        width: 33vw;
+        height: 20vw;
+        text-align: center;
+        background: white;
+        color: black;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #footer {
+        width: 100%;
+        clear: both;
+        text-align: center;
+      }
     </style>
     <?php
     if (isset($CSS) && strlen($CSS)) {
