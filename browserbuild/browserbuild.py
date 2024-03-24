@@ -41,7 +41,7 @@ class BrowserBuild(object):
         result = False
         error = None
         try:
-            self.job = self.queue.reserve()
+            self.job = self.queue.reserve(30)
             if self.job:
                 test_id = self.job.body
                 if test_id == 'latest':
