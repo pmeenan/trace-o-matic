@@ -180,6 +180,8 @@ class BrowserTest(object):
                     self.test['categories'].append("__metadata")
                     if 'url' in self.test and 'runs' in self.test and error is None:
                         result = True
+        except greenstalk.TimedOutError:
+            pass
         except Exception:
             logging.exception("Error loading test")
         return result
@@ -479,9 +481,6 @@ def main():
     """Startup and initialization"""
     import argparse
     parser = argparse.ArgumentParser(description='Trace-O-Matic Browser Test agent.', prog='browsertest')
-    parser.add_argument('-v', '--verbose', action='count',
-                        help="Increase verbosity (specify multiple times for more)."
-                        " -vvvv for full debug output.")
     parser.add_argument('--device',
                         help="Device ID (only needed if more than one android device attached).")
     parser.add_argument('--temperature', type=int, default=36,
