@@ -35,8 +35,8 @@ use Pheanstalk\Values\TubeName;
       $tubes[$name] = $stats->totalJobs;
     }
   }
-  $build = $tubes['build'] == 0 ? "Idle" : "{$tubes['build']} jobs waiting";
-  $test = $tubes['test'] == 0 ? "Idle" : "{$tubes['test']} jobs waiting";
+  $build = $tubes['build'] == 0 ? "Idle" : "{$tubes['build']} job(s) waiting";
+  $test = $tubes['test'] == 0 ? "Idle" : "{$tubes['test']} job(s) waiting";
   echo("<span id='queue'> Build queue: <b>$build</b>, Test queue: <b>$test</b></span>");
 ?>
 

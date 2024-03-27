@@ -1,8 +1,11 @@
 /settings.json
 /status.json
 __pycache__
+/browserbuild/tmp*
 /browsertest/tmp*
 /browsertest/results
 /www/results
 /vendor
 .vscode
+build.log
+*.lock

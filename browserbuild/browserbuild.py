@@ -91,7 +91,7 @@ class BrowserBuild(object):
     def exec(self, cmd):
         """ Run the given command, Throwing an exception if it fails """
         self.set_status(' '.join(cmd))
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True, encoding='utf-8', cwd=self.settings['src_dir'])
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', cwd=self.settings['src_dir'])
         for line in iter(proc.stdout.readline, ''):
             try:
                 if (time.monotonic() - self.last_update >= 30):
