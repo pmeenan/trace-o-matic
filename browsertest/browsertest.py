@@ -470,6 +470,7 @@ class BrowserTest(object):
                         if os.path.exists(running_file):
                             os.remove(running_file)
                         self.queue.delete(self.job)
+                        self.job = None
                         logging.debug("Test complete")
                     except Exception:
                         logging.exception("Unhandled exception running test")

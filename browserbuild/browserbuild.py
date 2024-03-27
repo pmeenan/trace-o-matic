@@ -85,8 +85,11 @@ class BrowserBuild(object):
         if self.test is not None and 'path' in self.test:
             with open(os.path.join(self.test['path'], '.building'), 'wt') as f:
                 f.write(status)
-        if self.job is not None and self.queue is not None:
-            self.queue.touch(self.job)
+        try:
+            if self.job is not None and self.queue is not None:
+                self.queue.touch(self.job)
+        except Exception:
+            pass
 
     def exec(self, cmd):
         """ Run the given command, Throwing an exception if it fails """
@@ -172,6 +175,7 @@ class BrowserBuild(object):
                             self.queue.put(self.test['id'])
 
                         self.queue.delete(self.job)
+                        self.job = None
                         logging.debug("Build complete")
 
                         if not ok and 'path' in self.test:
