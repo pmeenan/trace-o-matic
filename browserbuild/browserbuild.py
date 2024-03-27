@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2024 Google Inc.
 """Trace-O-Matic Browser Build agent"""
+import fcntl
 import greenstalk
 import gzip
 import logging
@@ -185,8 +186,21 @@ class BrowserBuild(object):
             logging.exception("Unhandled exception")
         self.cleanup()
 
+# Make sure only one instance is running at a time
+lock_handle = None
+def run_once():
+    """Use a non-blocking lock on the current code file to make sure multiple instance aren't running"""
+    global lock_handle
+    try:
+        lock_handle = open(os.path.realpath(__file__) + '.lock','w')
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except:
+        logging.critical('Already running')
+        os._exit(0)
+
 def main():
     """Startup and initialization"""
+    run_once()
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s.%(msecs)03d - %(message)s", datefmt="%H:%M:%S")
