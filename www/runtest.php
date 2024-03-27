@@ -59,7 +59,12 @@ if (isset($test)) {
   try {
     $pheanstalk = Pheanstalk::create('127.0.0.1');
     if (isset($test['cl'])) {
-      $tube = new TubeName('build');
+      $apk = "{$SETTINGS['apk_dir']}/{$test['cl']}.apk";
+      if ($test['rebuild'] || !is_file($apk)) {
+        $tube = new TubeName('build');
+      } else {
+        $tube = new TubeName('test');
+      }
     } else {
       $tube = new TubeName('test');
     }
