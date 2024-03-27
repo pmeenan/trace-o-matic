@@ -1,6 +1,9 @@
 <?php
 include(__DIR__ . "/include/common.php");
 include(__DIR__ . "/include/header.php");
+require(__DIR__ . '/../vendor/autoload.php');
+use Pheanstalk\Pheanstalk;
+use Pheanstalk\Values\TubeName;
 ?>
 <div id="test_form">
 <h1>Welcome to Trace-O-Matic</h1>
@@ -21,6 +24,22 @@ include(__DIR__ . "/include/header.php");
   <input type="number" id="runs" name="runs" value="1" min="1" max="100" step="1" required>
   </p>
   <input type="submit" value="Start Test">
+<?php
+  $tubes = array('build' => 0, 'test' => 0);
+  $pheanstalk = Pheanstalk::create('127.0.0.1');
+  $t = $pheanstalk->listTubes();
+  foreach ($t as $tube) {
+    $name = strval($tube);
+    if (isset($tubes[$name])) {
+      $stats = $pheanstalk->statsTube($tube);
+      $tubes[$name] = $stats->totalJobs;
+    }
+  }
+  $build = $tubes['build'] == 0 ? "Idle" : "{$tubes['build']} jobs waiting";
+  $test = $tubes['test'] == 0 ? "Idle" : "{$tubes['test']} jobs waiting";
+  echo("<span id='queue'> Build queue: <b>$build</b>, Test queue: <b>$test</b></span>");
+?>
+
   <h3>Advanced Settings:</h3>
   <p>
   <label for="latency">Additional connection latency (ms):</label>

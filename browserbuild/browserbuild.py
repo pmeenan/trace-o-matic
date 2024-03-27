@@ -116,11 +116,10 @@ class BrowserBuild(object):
                         os.mkdir(self.tmp)
 
                         # Capture a debug log along with the test
-                        if 'path' in self.test:
-                            log_file = os.path.join(self.tmp, 'build.log')
-                            log_handler = logging.FileHandler(log_file)
-                            log_handler.setFormatter(self.log_formatter)
-                            logging.getLogger().addHandler(log_handler)
+                        log_file = os.path.join(self.tmp, 'build.log')
+                        log_handler = logging.FileHandler(log_file)
+                        log_handler.setFormatter(self.log_formatter)
+                        logging.getLogger().addHandler(log_handler)
 
                         # Build Chromium
                         try:
@@ -148,23 +147,25 @@ class BrowserBuild(object):
                             logging.exception("Error building")
 
                         # Turn off the logging
+                        log_handler.close()
+                        logging.getLogger().removeHandler(log_handler)
+
+                            # Move the build log to the results directory
                         if 'path' in self.test:
+                            logging.debug("Uploading build log")
                             try:
-                                log_handler.close()
-                                logging.getLogger().removeHandler(log_handler)
                                 with open(log_file, 'rb') as f_in:
                                     with gzip.open(log_file + '.gz', 'wb') as f_out:
                                         shutil.copyfileobj(f_in, f_out)
                                 os.remove(log_file)
                             except Exception:
                                 pass
-
-                            # Move the build log to the results directory
-                            logging.debug("Uploading build log")
                             files = os.listdir(self.tmp)
                             for file in files:
                                 logging.debug("Uploading %s...", file)
                                 shutil.move(os.path.join(self.tmp, file), self.test['path'])
+                        else:
+                            shutil.move(log_file, os.path.join(self.path, "build.log"))
 
                         # send the test to the testing queue
                         if ok and self.test['id'] != 'latest':
