@@ -10,6 +10,10 @@ function get_test_status() {
     $status['done'] = true;
     $status['heading'] = "Test is complete";
     $status['status'] = file_get_contents("$TEST_DIR/.done");
+  } elseif (is_file("$TEST_DIR/.error")) {
+    $status['done'] = true;
+    $status['heading'] = "Test error";
+    $status['status'] = file_get_contents("$TEST_DIR/.error");
   } elseif (is_file("$TEST_DIR/.running")) {
     $status['heading'] = "Test is running";
     $status['status'] = file_get_contents("$TEST_DIR/.running");
