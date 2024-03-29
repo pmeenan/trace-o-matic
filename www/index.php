@@ -32,7 +32,7 @@ use Pheanstalk\Values\TubeName;
     $name = strval($tube);
     if (isset($tubes[$name])) {
       $stats = $pheanstalk->statsTube($tube);
-      $tubes[$name] = $stats->totalJobs;
+      $tubes[$name] = $stats->currentJobsReady + $stats->currentJobsReserved;
     }
   }
   $build = $tubes['build'] == 0 ? "Idle" : "{$tubes['build']} job(s) waiting";
